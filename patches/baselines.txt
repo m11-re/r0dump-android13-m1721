@@ -1,0 +1,6 @@
+# 每个补丁的基线（打补丁前该项目 HEAD 应为该 commit）
+01-art.patch                    art                     aeeafbd459298788c7760f35d04e7c0568d192b5
+02-frameworks-base.patch        frameworks/base         a42b5e6d8bfca9aa82bd1391308c45780d35a190
+03-libcore.patch                libcore                 59b2cb7f0c05106805a1a762d9271162d51f82d4
+04-system-sepolicy.patch        system/sepolicy         60f5720f939213f8e20ec4eaab49d5348576c70d
+05-device-meizu-m1721.patch     device/meizu/m1721      76fad0b1d14577076aecd81622eab769d6109c30

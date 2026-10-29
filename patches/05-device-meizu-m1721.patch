@@ -1,0 +1,20 @@
+diff --git a/device.mk b/device.mk
+index adca154..55df3a4 100644
+--- a/device.mk
++++ b/device.mk
+@@ -91,6 +91,15 @@ PRODUCT_COPY_FILES += \
+ PRODUCT_PACKAGES += \
+     AntHalService
+ 
++# r0dump: ART-integrated unpacker manager (platform-signed priv-app) and the
++# root helper that creates the per-application run directory under
++# /sdcard/Android/data/<pkg>/files/r0dump-fusion/.  The helper is the only
++# component that can set the ownership and mode the in-ART engine validates.
++PRODUCT_PACKAGES += \
++    R0dumpManager \
++    r0dump_file_helper \
++    r0dump_mcp_bridge
++
+ # Audio
+ PRODUCT_PACKAGES += \
+     android.hardware.audio@7.1-impl:32 \

@@ -1,0 +1,329 @@
+diff --git a/api/module-lib-current.txt b/api/module-lib-current.txt
+index c85cffb..060132d 100644
+--- a/api/module-lib-current.txt
++++ b/api/module-lib-current.txt
+@@ -375,6 +375,26 @@ package dalvik.system {
+     method public static void stopZygoteNoThreadCreation();
+   }
+ 
++  public final class r0dump_Runtime {
++    method public static void r0dump_CaptureCookie(Object, int);
++    method public static void r0dump_CaptureExecutable(java.lang.reflect.Executable, Object, String, int);
++    method public static void r0dump_CaptureRouteCookieNative(Object, int, String);
++    method public static boolean r0dump_CompleteWalk(boolean);
++    method public static Class r0dump_FindLoadedClass(ClassLoader, String);
++    method public static boolean r0dump_ForceInvoke(java.lang.reflect.Executable, Object, String);
++    method public static String[] r0dump_GetCookieClassNames(Object);
++    method public static String[] r0dump_GetDexCacheClassNames(ClassLoader, String);
++    method public static Object[] r0dump_GetDexCookies(ClassLoader);
++    method public static String[] r0dump_GetLoadedClassNames(ClassLoader);
++    method public static ClassLoader[] r0dump_GetRegisteredClassLoaders();
++    method public static boolean r0dump_IsCapturePointActive(int);
++    method public static boolean r0dump_PublishManifestSnapshot(String, String, String[], String[], int[], String[], String[], int[], String[], int, int, int, int, String);
++    method public static boolean r0dump_ServiceFlush();
++    method public static boolean r0dump_configure(int, boolean, String, String, String, String, String, int, long, long, long, long, long, long, long, long, long, boolean, boolean, long, long, long, long, long, long, boolean, int, int, String, long, long, long, boolean, String, String, String, long);
++    field public static final int r0dump_SOURCE_COOKIE = 39; // 0x27
++    field public static final int r0dump_SOURCE_EXECUTABLE = 40; // 0x28
++  }
++
+ }
+ 
+ package java.io {
+diff --git a/libart/src/main/java/dalvik/system/r0dump_Runtime.java b/libart/src/main/java/dalvik/system/r0dump_Runtime.java
+new file mode 100644
+index 0000000..79358c4
+--- /dev/null
++++ b/libart/src/main/java/dalvik/system/r0dump_Runtime.java
+@@ -0,0 +1,280 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package dalvik.system;
++
++import static android.annotation.SystemApi.Client.MODULE_LIBRARIES;
++
++import android.annotation.SystemApi;
++
++import java.lang.reflect.Executable;
++
++/**
++ * Java-side entry points of the ART-integrated r0dump capture engine.
++ *
++ * <p>ART registers these natives in {@code Runtime::RegisterRuntimeNativeMethods()}, so no
++ * injected library or {@code System.loadLibrary} call is involved.  The engine lives inside
++ * libart and is driven entirely from the target application's own process, which is what makes it
++ * usable against shells that detect external instrumentation.
++ *
++ * <p>Everything here is deliberately coarse: the manager side only writes a bounded configuration
++ * and reads back bounded observations.  Nothing in this class mutates application state on its
++ * own, and every entry point re-checks the capture-point mask so a disabled run is a no-op.
++ *
++ * <p>See {@link libcore.api.CorePlatformApi} for why this is a core-platform API rather than a
++ * regular hidden method: it is only reachable from within the platform (framework and the manager
++ * app are both system components), and it must be visible to {@code framework-minus-apex} at
++ * compile time.
++ *
++ * @hide
++ */
++@SystemApi(client = MODULE_LIBRARIES)
++public final class r0dump_Runtime {
++    /** Mirrors r0dump_Point::kWalkCookieDex / etc. as used by the Java-side walk. */
++    public static final int r0dump_SOURCE_COOKIE = 39;
++    public static final int r0dump_SOURCE_EXECUTABLE = 40;
++
++    /**
++     * Snapshot of the active capture-point mask.
++     *
++     * <p>Read on every Java-side route decision, so it is kept in a plain volatile field rather
++     * than a native call.  The native mask is authoritative; this copy only avoids a JNI
++     * transition on the hot path.
++     */
++    private static volatile long r0dump_capturePointMask;
++
++    private r0dump_Runtime() {
++    }
++
++    public static boolean r0dump_IsCapturePointActive(int point) {
++        return (r0dump_capturePointMask & (1L << point)) != 0L;
++    }
++
++    /**
++     * Installs the process-local configuration and returns whether ART accepted it.
++     *
++     * <p>Must run inside the process being captured, after the runtime identity is known.  The
++     * native side re-validates every field and rejects the call (returning false) if the
++     * configuration does not match this process, so a mis-targeted write cannot enable capture
++     * in the wrong application.
++     *
++     * <p>{@code preparedDirectoryFd} is the run directory the r0dump helper already created on
++     * this process's behalf (mode 02770, owner = this process's uid, group = AID_EXT_DATA_RW).
++     * The framework obtains it from {@code ActivityManager.r0dump_prepareOutput()} and passes the
++     * raw descriptor through.  The native engine {@code dup()}s it, so the caller keeps ownership
++     * of its own handle.  Pass {@code -1} when no helper-prepared directory is available.
++     *
++     * @param schema configuration schema version understood by ART
++     * @param enabled whether capture should be armed
++     * @param runId opaque run identifier, also the on-disk directory name
++     * @param targetPackage package that owns the captured process
++     * @param targetProcess process name the configuration applies to
++     * @param processName name of the calling process
++     * @param outputParent the caller-owned directory that will hold the run directory; must be the
++     *     application's own external files directory for this package
++     * @param capturePointMask bit mask of enabled observation points
++     * @param walkNamespacePrefix only classes under this prefix are walked (empty means all)
++     * @return true when ART accepted and installed the configuration
++     */
++    public static boolean r0dump_configure(
++            int schema,
++            boolean enabled,
++            String runId,
++            String targetPackage,
++            String targetProcess,
++            String processName,
++            String outputParent,
++            int preparedDirectoryFd,
++            long capturePointMask,
++            long maxRecords,
++            long maxArtifacts,
++            long maxTotalBytes,
++            long maxDexBytes,
++            long bufferPoolBytes,
++            long maxCodeItemBytes,
++            long maxFrozenGenerations,
++            long flushIdleMs,
++            boolean manifestEnabled,
++            boolean manifestIncludeSplits,
++            long manifestMaxComponents,
++            long manifestMaxSplits,
++            long manifestMaxEventsPerSource,
++            long manifestMaxTotalEvents,
++            long manifestMaxXmlDepth,
++            long manifestMaxAttributeLength,
++            boolean walkEnabled,
++            int walkStart,
++            int walkMode,
++            String walkNamespacePrefix,
++            long walkDelayMs,
++            long walkMaxClasses,
++            long walkMaxMethods,
++            boolean forceInvokeEnabled,
++            String forceClass,
++            String forceMethod,
++            String forceMethodDescriptor,
++            long forceMaxCalls) {
++        // Publish the mask only after ART has accepted the configuration; if the native side
++        // rejects the call, the Java-side gate must stay closed.
++        final boolean accepted = r0dump_configureNative(
++                schema,
++                enabled,
++                runId,
++                targetPackage,
++                targetProcess,
++                processName,
++                outputParent,
++                preparedDirectoryFd,
++                capturePointMask,
++                maxRecords,
++                maxArtifacts,
++                maxTotalBytes,
++                maxDexBytes,
++                bufferPoolBytes,
++                maxCodeItemBytes,
++                maxFrozenGenerations,
++                flushIdleMs,
++                manifestEnabled,
++                manifestIncludeSplits,
++                manifestMaxComponents,
++                manifestMaxSplits,
++                manifestMaxEventsPerSource,
++                manifestMaxTotalEvents,
++                manifestMaxXmlDepth,
++                manifestMaxAttributeLength,
++                walkEnabled,
++                walkStart,
++                walkMode,
++                walkNamespacePrefix,
++                walkDelayMs,
++                walkMaxClasses,
++                walkMaxMethods,
++                forceInvokeEnabled,
++                forceClass,
++                forceMethod,
++                forceMethodDescriptor,
++                forceMaxCalls);
++        r0dump_capturePointMask = accepted && enabled ? capturePointMask : 0L;
++        return accepted;
++    }
++
++    /** Every live class loader, so the walk can reach classes outside the application loader. */
++    public static native ClassLoader[] r0dump_GetRegisteredClassLoaders();
++
++    /** Dot-separated names of the classes the given loader has already loaded. */
++    public static native String[] r0dump_GetLoadedClassNames(ClassLoader classLoader);
++
++    /**
++     * The raw ART dex cookies reachable from {@code classLoader}.
++     *
++     * <p>A cookie is ART's opaque handle for one opened dex list; the walk iterates the loader's
++     * {@code DexPathList} to collect them, then feeds each one back to the native engine so the
++     * dex images behind it can be observed directly.
++     */
++    public static native Object[] r0dump_GetDexCookies(ClassLoader classLoader);
++
++    /** Dot-separated names of the classes declared by the dex files behind a cookie. */
++    public static native String[] r0dump_GetCookieClassNames(Object cookie);
++
++    /** Dot-separated names of the classes reachable through the loader's dex caches. */
++    public static native String[] r0dump_GetDexCacheClassNames(
++            ClassLoader classLoader, String namespacePrefix);
++
++    /** Resolves a loaded class by name, or null when the loader does not know it. */
++    public static native Class r0dump_FindLoadedClass(ClassLoader classLoader, String className);
++
++    /** Records the dex images behind a cookie (initiating an on-demand capture). */
++    public static native void r0dump_CaptureCookie(Object cookie, int sourceId);
++
++    /** Records the dex images behind a cookie, attributing them to a routed call site. */
++    public static native void r0dump_CaptureRouteCookieNative(
++            Object cookie, int pointId, String className);
++
++    /** Captures the code item of a method or constructor reached through the walk. */
++    public static native void r0dump_CaptureExecutable(
++            Executable executable, Object cookie, String className, int sourceId);
++
++    /**
++     * Forces execution of a selected method so a shell materializes its code item.
++     *
++     * <p>The native side intercepts the invocation before the body runs (see the
++     * {@code kForceInvokeNoExecute} point), so this does not execute application code.
++     */
++    public static native boolean r0dump_ForceInvoke(
++            Executable executable, Object cookie, String className);
++
++    /** Publishes the resolved manifest inventory for the run. */
++    public static native boolean r0dump_PublishManifestSnapshot(
++            String status,
++            String packageName,
++            String[] classNames,
++            String[] seedKinds,
++            int[] sourceOrdinals,
++            String[] sourceKinds,
++            String[] sourceStatuses,
++            int[] sourceEventCounts,
++            String[] sourceLimitHits,
++            int sourceCount,
++            int parsedSourceCount,
++            int rejectedSourceCount,
++            int xmlEventCount,
++            String limitHit);
++
++    /** Reports that the walk finished, and whether the bootstrap inventory completed. */
++    public static native boolean r0dump_CompleteWalk(boolean bootstrapCompleted);
++
++    /** Services the async writer queue; returns true while more work remains. */
++    public static native boolean r0dump_ServiceFlush();
++
++    private static native boolean r0dump_configureNative(
++            int schema,
++            boolean enabled,
++            String runId,
++            String targetPackage,
++            String targetProcess,
++            String processName,
++            String outputParent,
++            int preparedDirectoryFd,
++            long capturePointMask,
++            long maxRecords,
++            long maxArtifacts,
++            long maxTotalBytes,
++            long maxDexBytes,
++            long bufferPoolBytes,
++            long maxCodeItemBytes,
++            long maxFrozenGenerations,
++            long flushIdleMs,
++            boolean manifestEnabled,
++            boolean manifestIncludeSplits,
++            long manifestMaxComponents,
++            long manifestMaxSplits,
++            long manifestMaxEventsPerSource,
++            long manifestMaxTotalEvents,
++            long manifestMaxXmlDepth,
++            long manifestMaxAttributeLength,
++            boolean walkEnabled,
++            int walkStart,
++            int walkMode,
++            String walkNamespacePrefix,
++            long walkDelayMs,
++            long walkMaxClasses,
++            long walkMaxMethods,
++            boolean forceInvokeEnabled,
++            String forceClass,
++            String forceMethod,
++            String forceMethodDescriptor,
++            long forceMaxCalls);
++}
+diff --git a/non_openjdk_java_files.bp b/non_openjdk_java_files.bp
+index 5e32adb..4e8733f 100755
+--- a/non_openjdk_java_files.bp
++++ b/non_openjdk_java_files.bp
+@@ -83,6 +83,7 @@ filegroup {
+         "libart/src/main/java/dalvik/system/TransactionAbortError.java",
+         "libart/src/main/java/dalvik/system/VMRuntime.java",
+         "libart/src/main/java/dalvik/system/VMStack.java",
++        "libart/src/main/java/dalvik/system/r0dump_Runtime.java",
+         "libart/src/main/java/java/lang/AndroidHardcodedSystemProperties.java",
+         "libart/src/main/java/java/lang/Daemons.java",
+         "libart/src/main/java/java/lang/DexCache.java",

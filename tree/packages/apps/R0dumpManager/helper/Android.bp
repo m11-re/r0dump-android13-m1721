@@ -1,0 +1,70 @@
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+cc_library_static {
+    name: "libr0dump_file_helper_core",
+    host_supported: true,
+    srcs: [
+        "r0dump_export_core.cpp",
+        "r0dump_file_helper_core.cpp",
+    ],
+    export_include_dirs: ["."],
+    shared_libs: [
+        "libcrypto",
+        "libjsoncpp",
+        "libziparchive",
+        "libz",
+    ],
+    cflags: ["-Wall", "-Wextra", "-Werror"],
+}
+
+cc_binary {
+    name: "r0dump_file_helper",
+    srcs: ["r0dump_file_helper.cpp"],
+    // std::filesystem still ships as its own static library on this Android release;
+    // the platform only merged it into libc++ later.
+    static_libs: [
+        "libr0dump_file_helper_core",
+        "libc++fs",
+    ],
+    shared_libs: [
+        "libbase",
+        "libcrypto",
+        "libcutils",
+        "libjsoncpp",
+        "liblog",
+        "libziparchive",
+        "libz",
+    ],
+    header_libs: ["libcutils_headers"],
+    init_rc: ["r0dump_file_helper.rc"],
+    cflags: ["-Wall", "-Wextra", "-Werror"],
+}
+
+cc_binary {
+    name: "r0dump_mcp_bridge",
+    srcs: ["r0dump_mcp_bridge.cpp"],
+    cflags: ["-Wall", "-Wextra", "-Werror"],
+}
+
+cc_test {
+    name: "r0dump_file_helper_tests",
+    host_supported: true,
+    srcs: ["r0dump_file_helper_test.cpp"],
+    static_libs: ["libr0dump_file_helper_core"],
+    shared_libs: [
+        "libcrypto",
+        "libjsoncpp",
+        "libziparchive",
+        "libz",
+    ],
+    cflags: ["-Wall", "-Wextra", "-Werror"],
+    test_suites: ["general-tests"],
+}
+
+cc_binary {
+    name: "r0dump_grouptest",
+    srcs: ["r0dump_grouptest.cpp"],
+    cflags: ["-Wall", "-Wextra", "-Werror"],
+}

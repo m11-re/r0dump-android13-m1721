@@ -1,0 +1,342 @@
+diff --git a/prebuilts/api/33.0/private/compat/32.0/32.0.ignore.cil b/prebuilts/api/33.0/private/compat/32.0/32.0.ignore.cil
+index 7c3058e..785a47e 100644
+--- a/prebuilts/api/33.0/private/compat/32.0/32.0.ignore.cil
++++ b/prebuilts/api/33.0/private/compat/32.0/32.0.ignore.cil
+@@ -63,6 +63,7 @@
+     prng_seeder
+     proc_watermark_boost_factor
+     proc_watermark_scale_factor
++    r0dump_fusion_prop
+     remotelyprovisionedkeypool_service
+     resources_manager_service
+     rootdisk_sysdev
+diff --git a/prebuilts/api/33.0/private/file_contexts b/prebuilts/api/33.0/private/file_contexts
+index 65baa5d..1ecfed0 100644
+--- a/prebuilts/api/33.0/private/file_contexts
++++ b/prebuilts/api/33.0/private/file_contexts
+@@ -132,6 +132,7 @@
+ /dev/socket/dnsproxyd	u:object_r:dnsproxyd_socket:s0
+ /dev/socket/dumpstate	u:object_r:dumpstate_socket:s0
+ /dev/socket/fwmarkd	u:object_r:fwmarkd_socket:s0
++/dev/socket/r0dump_file_helper	u:object_r:r0dump_file_helper_socket:s0
+ /dev/socket/lmkd        u:object_r:lmkd_socket:s0
+ /dev/socket/logd	u:object_r:logd_socket:s0
+ /dev/socket/logdr	u:object_r:logdr_socket:s0
+@@ -218,6 +219,7 @@
+ /system/bin/mm_events		u:object_r:mm_events_exec:s0
+ /system/bin/atrace	u:object_r:atrace_exec:s0
+ /system/bin/auditctl	u:object_r:auditctl_exec:s0
++/system/bin/r0dump_file_helper	u:object_r:r0dump_file_helper_exec:s0
+ /system/bin/bcc                 u:object_r:rs_exec:s0
+ /system/bin/blank_screen	u:object_r:blank_screen_exec:s0
+ /system/bin/boringssl_self_test(32|64) u:object_r:boringssl_self_test_exec:s0
+diff --git a/prebuilts/api/33.0/private/property_contexts b/prebuilts/api/33.0/private/property_contexts
+index b3bb039..f396304 100644
+--- a/prebuilts/api/33.0/private/property_contexts
++++ b/prebuilts/api/33.0/private/property_contexts
+@@ -70,6 +70,7 @@ persist.netd.stable_secret      u:object_r:netd_stable_secret_prop:s0
+ persist.pm.mock-upgrade u:object_r:mock_ota_prop:s0
+ persist.profcollectd.node_id    u:object_r:profcollectd_node_id_prop:s0     exact   string
+ persist.sys.            u:object_r:system_prop:s0
++persist.sys.r0dump.fusion. u:object_r:r0dump_fusion_prop:s0 prefix string
+ persist.sys.safemode    u:object_r:safemode_prop:s0
+ persist.sys.tap_gesture u:object_r:gesture_prop:s0
+ persist.sys.theme       u:object_r:theme_prop:s0
+diff --git a/prebuilts/api/33.0/private/r0dump_file_helper.te b/prebuilts/api/33.0/private/r0dump_file_helper.te
+new file mode 100644
+index 0000000..9effaaf
+--- /dev/null
++++ b/prebuilts/api/33.0/private/r0dump_file_helper.te
+@@ -0,0 +1,69 @@
++type r0dump_file_helper, domain, coredomain;
++# The helper binary is a platform component, so its executable type follows the
++# same shape as the other built-in daemons (compare artd_exec).  init_daemon_domain
++# below requires the _exec type to exist by name.
++type r0dump_file_helper_exec, system_file_type, exec_type, file_type;
++init_daemon_domain(r0dump_file_helper)
++
++# The helper's init .rc declares a seqpacket socket named r0dump_file_helper; the
++# matching sock_file type is what system_server connects to.  Both ends live in
++# coredomain, so the type carries coredomain_socket like the other platform
++# daemon sockets (see dev/socket entries in file_contexts).
++type r0dump_file_helper_socket, file_type, coredomain_socket;
++
++# Captured app artifacts inherit the target app's MCS categories. The helper is
++# a platform daemon that validates and confines every request to the package
++# selected by system_server, so it must be able to cross those categories.
++typeattribute r0dump_file_helper mlstrustedsubject;
++
++get_prop(r0dump_file_helper, r0dump_fusion_prop)
++
++allow r0dump_file_helper self:capability { chown fowner fsetid setuid };
++allow r0dump_file_helper self:unix_stream_socket { accept listen read write getattr getopt setopt };
++
++# Traverse the per-user mount namespace before opening the FUSE-backed root.
++allow r0dump_file_helper mnt_user_file:dir search;
++
++# The emulated-storage FUSE daemon performs checks against the backing
++# media_rw data label while the helper walks and prepares app external files.
++allow r0dump_file_helper media_rw_data_file:dir create_dir_perms;
++allow r0dump_file_helper media_rw_data_file:file create_file_perms;
++
++# This device mounts /mnt/user/0/emulated with FUSE but keeps Android/data and Android/obb on
++# separate sdcardfs mounts (see the sdcardfs entries in /proc/mounts).  Upstream only had to cover
++# FUSE, so the rules below name sdcard_type alongside fuse -- sdcardfs is tagged sdcard_type, and
++# without it the helper is denied while walking into Android/data:
++#   avc: denied { search } for comm="r0dump_file_hel" name="data" dev="sdcardfs"
++#     scontext=u:r:r0dump_file_helper:s0 tcontext=u:object_r:sdcardfs:s0 tclass=dir
++allow r0dump_file_helper { sdcard_type fuse }:dir {
++  add_name
++  create
++  getattr
++  open
++  read
++  remove_name
++  rmdir
++  search
++  setattr
++  write
++};
++allow r0dump_file_helper { sdcard_type fuse }:file create_file_perms;
++
++# system_server opens the installed base/split APKs after validating the
++# Manager caller and passes only those read-only descriptors to the helper.
++allow r0dump_file_helper system_server:fd use;
++allow r0dump_file_helper apk_data_file:file { getattr read };
++
++allow system_server r0dump_file_helper_socket:sock_file write;
++allow system_server r0dump_file_helper:unix_stream_socket connectto;
++allow system_server r0dump_file_helper:fd use;
++# SELinux maps receipt of an O_PATH FD to the ioctl permission when no
++# FMODE_READ/FMODE_WRITE bit exists. This permits only FD receipt; the platform
++# neverallow still prevents system_server from opening, reading, or writing
++# external-storage directories.
++allow system_server { sdcard_type fuse }:dir ioctl;
++
++# The helper owns the directory file description even after system_server
++# duplicates it into a ParcelFileDescriptor. Only AMS can obtain and forward
++# this descriptor; its Binder entry validates the calling app UID/PID first.
++allow appdomain r0dump_file_helper:fd use;
+diff --git a/prebuilts/api/33.0/private/r0dump_manager_app.te b/prebuilts/api/33.0/private/r0dump_manager_app.te
+new file mode 100644
+index 0000000..9171c21
+--- /dev/null
++++ b/prebuilts/api/33.0/private/r0dump_manager_app.te
+@@ -0,0 +1,22 @@
++type r0dump_manager_app, domain;
++typeattribute r0dump_manager_app coredomain;
++
++app_domain(r0dump_manager_app)
++
++# Match the service discovery surface available to platform-signed privileged
++# apps.  The dedicated domain remains isolated from writer/session services.
++allow r0dump_manager_app app_api_service:service_manager find;
++allow r0dump_manager_app system_api_service:service_manager find;
++
++# Manager is the sole writer; configured targets and system_server only read.
++set_prop(r0dump_manager_app, r0dump_fusion_prop)
++get_prop(appdomain, r0dump_fusion_prop)
++get_prop(system_server, r0dump_fusion_prop)
++
++# MCP bridge: the app hosts an abstract-namespace stream socket ("r0dump_mcp")
++# that the r0dump_mcp_bridge relay (spawned in the shell domain by adb exec-out)
++# connects to. Gate this to userdebug/eng where adb automation is expected.
++userdebug_or_eng(`
++    allow r0dump_manager_app self:unix_stream_socket { create bind listen accept read write getopt setopt shutdown };
++    allow shell r0dump_manager_app:unix_stream_socket connectto;
++')
+diff --git a/prebuilts/api/33.0/private/seapp_contexts b/prebuilts/api/33.0/private/seapp_contexts
+index b26d977..c7e6b33 100644
+--- a/prebuilts/api/33.0/private/seapp_contexts
++++ b/prebuilts/api/33.0/private/seapp_contexts
+@@ -142,6 +142,7 @@ isSystemServer=true domain=system_server_startup
+ neverallow name=com.android.sdksandbox domain=((?!sdk_sandbox).)*
+ 
+ user=_app seinfo=platform name=com.android.traceur domain=traceur_app type=app_data_file levelFrom=all
++user=_app seinfo=platform isPrivApp=true name=com.android.r0dumpmanager domain=r0dump_manager_app type=privapp_data_file levelFrom=all
+ user=_app isPrivApp=true name=com.android.remoteprovisioner domain=remote_prov_app type=app_data_file levelFrom=all
+ user=system seinfo=platform domain=system_app type=system_app_data_file
+ user=bluetooth seinfo=bluetooth domain=bluetooth type=bluetooth_data_file
+diff --git a/prebuilts/api/33.0/public/property.te b/prebuilts/api/33.0/public/property.te
+index 9db9b94..1c213c9 100644
+--- a/prebuilts/api/33.0/public/property.te
++++ b/prebuilts/api/33.0/public/property.te
+@@ -83,6 +83,7 @@ system_restricted_prop(persist_wm_debug_prop)
+ system_restricted_prop(power_debug_prop)
+ system_restricted_prop(property_service_version_prop)
+ system_restricted_prop(provisioned_prop)
++system_restricted_prop(r0dump_fusion_prop)
+ system_restricted_prop(restorecon_prop)
+ system_restricted_prop(retaildemo_prop)
+ system_restricted_prop(smart_idle_maint_enabled_prop)
+diff --git a/private/compat/32.0/32.0.ignore.cil b/private/compat/32.0/32.0.ignore.cil
+index 7c3058e..785a47e 100644
+--- a/private/compat/32.0/32.0.ignore.cil
++++ b/private/compat/32.0/32.0.ignore.cil
+@@ -63,6 +63,7 @@
+     prng_seeder
+     proc_watermark_boost_factor
+     proc_watermark_scale_factor
++    r0dump_fusion_prop
+     remotelyprovisionedkeypool_service
+     resources_manager_service
+     rootdisk_sysdev
+diff --git a/private/file_contexts b/private/file_contexts
+index 65baa5d..1ecfed0 100644
+--- a/private/file_contexts
++++ b/private/file_contexts
+@@ -132,6 +132,7 @@
+ /dev/socket/dnsproxyd	u:object_r:dnsproxyd_socket:s0
+ /dev/socket/dumpstate	u:object_r:dumpstate_socket:s0
+ /dev/socket/fwmarkd	u:object_r:fwmarkd_socket:s0
++/dev/socket/r0dump_file_helper	u:object_r:r0dump_file_helper_socket:s0
+ /dev/socket/lmkd        u:object_r:lmkd_socket:s0
+ /dev/socket/logd	u:object_r:logd_socket:s0
+ /dev/socket/logdr	u:object_r:logdr_socket:s0
+@@ -218,6 +219,7 @@
+ /system/bin/mm_events		u:object_r:mm_events_exec:s0
+ /system/bin/atrace	u:object_r:atrace_exec:s0
+ /system/bin/auditctl	u:object_r:auditctl_exec:s0
++/system/bin/r0dump_file_helper	u:object_r:r0dump_file_helper_exec:s0
+ /system/bin/bcc                 u:object_r:rs_exec:s0
+ /system/bin/blank_screen	u:object_r:blank_screen_exec:s0
+ /system/bin/boringssl_self_test(32|64) u:object_r:boringssl_self_test_exec:s0
+diff --git a/private/property_contexts b/private/property_contexts
+index b3bb039..f396304 100644
+--- a/private/property_contexts
++++ b/private/property_contexts
+@@ -70,6 +70,7 @@ persist.netd.stable_secret      u:object_r:netd_stable_secret_prop:s0
+ persist.pm.mock-upgrade u:object_r:mock_ota_prop:s0
+ persist.profcollectd.node_id    u:object_r:profcollectd_node_id_prop:s0     exact   string
+ persist.sys.            u:object_r:system_prop:s0
++persist.sys.r0dump.fusion. u:object_r:r0dump_fusion_prop:s0 prefix string
+ persist.sys.safemode    u:object_r:safemode_prop:s0
+ persist.sys.tap_gesture u:object_r:gesture_prop:s0
+ persist.sys.theme       u:object_r:theme_prop:s0
+diff --git a/private/r0dump_file_helper.te b/private/r0dump_file_helper.te
+new file mode 100644
+index 0000000..9effaaf
+--- /dev/null
++++ b/private/r0dump_file_helper.te
+@@ -0,0 +1,69 @@
++type r0dump_file_helper, domain, coredomain;
++# The helper binary is a platform component, so its executable type follows the
++# same shape as the other built-in daemons (compare artd_exec).  init_daemon_domain
++# below requires the _exec type to exist by name.
++type r0dump_file_helper_exec, system_file_type, exec_type, file_type;
++init_daemon_domain(r0dump_file_helper)
++
++# The helper's init .rc declares a seqpacket socket named r0dump_file_helper; the
++# matching sock_file type is what system_server connects to.  Both ends live in
++# coredomain, so the type carries coredomain_socket like the other platform
++# daemon sockets (see dev/socket entries in file_contexts).
++type r0dump_file_helper_socket, file_type, coredomain_socket;
++
++# Captured app artifacts inherit the target app's MCS categories. The helper is
++# a platform daemon that validates and confines every request to the package
++# selected by system_server, so it must be able to cross those categories.
++typeattribute r0dump_file_helper mlstrustedsubject;
++
++get_prop(r0dump_file_helper, r0dump_fusion_prop)
++
++allow r0dump_file_helper self:capability { chown fowner fsetid setuid };
++allow r0dump_file_helper self:unix_stream_socket { accept listen read write getattr getopt setopt };
++
++# Traverse the per-user mount namespace before opening the FUSE-backed root.
++allow r0dump_file_helper mnt_user_file:dir search;
++
++# The emulated-storage FUSE daemon performs checks against the backing
++# media_rw data label while the helper walks and prepares app external files.
++allow r0dump_file_helper media_rw_data_file:dir create_dir_perms;
++allow r0dump_file_helper media_rw_data_file:file create_file_perms;
++
++# This device mounts /mnt/user/0/emulated with FUSE but keeps Android/data and Android/obb on
++# separate sdcardfs mounts (see the sdcardfs entries in /proc/mounts).  Upstream only had to cover
++# FUSE, so the rules below name sdcard_type alongside fuse -- sdcardfs is tagged sdcard_type, and
++# without it the helper is denied while walking into Android/data:
++#   avc: denied { search } for comm="r0dump_file_hel" name="data" dev="sdcardfs"
++#     scontext=u:r:r0dump_file_helper:s0 tcontext=u:object_r:sdcardfs:s0 tclass=dir
++allow r0dump_file_helper { sdcard_type fuse }:dir {
++  add_name
++  create
++  getattr
++  open
++  read
++  remove_name
++  rmdir
++  search
++  setattr
++  write
++};
++allow r0dump_file_helper { sdcard_type fuse }:file create_file_perms;
++
++# system_server opens the installed base/split APKs after validating the
++# Manager caller and passes only those read-only descriptors to the helper.
++allow r0dump_file_helper system_server:fd use;
++allow r0dump_file_helper apk_data_file:file { getattr read };
++
++allow system_server r0dump_file_helper_socket:sock_file write;
++allow system_server r0dump_file_helper:unix_stream_socket connectto;
++allow system_server r0dump_file_helper:fd use;
++# SELinux maps receipt of an O_PATH FD to the ioctl permission when no
++# FMODE_READ/FMODE_WRITE bit exists. This permits only FD receipt; the platform
++# neverallow still prevents system_server from opening, reading, or writing
++# external-storage directories.
++allow system_server { sdcard_type fuse }:dir ioctl;
++
++# The helper owns the directory file description even after system_server
++# duplicates it into a ParcelFileDescriptor. Only AMS can obtain and forward
++# this descriptor; its Binder entry validates the calling app UID/PID first.
++allow appdomain r0dump_file_helper:fd use;
+diff --git a/private/r0dump_manager_app.te b/private/r0dump_manager_app.te
+new file mode 100644
+index 0000000..9171c21
+--- /dev/null
++++ b/private/r0dump_manager_app.te
+@@ -0,0 +1,22 @@
++type r0dump_manager_app, domain;
++typeattribute r0dump_manager_app coredomain;
++
++app_domain(r0dump_manager_app)
++
++# Match the service discovery surface available to platform-signed privileged
++# apps.  The dedicated domain remains isolated from writer/session services.
++allow r0dump_manager_app app_api_service:service_manager find;
++allow r0dump_manager_app system_api_service:service_manager find;
++
++# Manager is the sole writer; configured targets and system_server only read.
++set_prop(r0dump_manager_app, r0dump_fusion_prop)
++get_prop(appdomain, r0dump_fusion_prop)
++get_prop(system_server, r0dump_fusion_prop)
++
++# MCP bridge: the app hosts an abstract-namespace stream socket ("r0dump_mcp")
++# that the r0dump_mcp_bridge relay (spawned in the shell domain by adb exec-out)
++# connects to. Gate this to userdebug/eng where adb automation is expected.
++userdebug_or_eng(`
++    allow r0dump_manager_app self:unix_stream_socket { create bind listen accept read write getopt setopt shutdown };
++    allow shell r0dump_manager_app:unix_stream_socket connectto;
++')
+diff --git a/private/seapp_contexts b/private/seapp_contexts
+index b26d977..c7e6b33 100644
+--- a/private/seapp_contexts
++++ b/private/seapp_contexts
+@@ -142,6 +142,7 @@ isSystemServer=true domain=system_server_startup
+ neverallow name=com.android.sdksandbox domain=((?!sdk_sandbox).)*
+ 
+ user=_app seinfo=platform name=com.android.traceur domain=traceur_app type=app_data_file levelFrom=all
++user=_app seinfo=platform isPrivApp=true name=com.android.r0dumpmanager domain=r0dump_manager_app type=privapp_data_file levelFrom=all
+ user=_app isPrivApp=true name=com.android.remoteprovisioner domain=remote_prov_app type=app_data_file levelFrom=all
+ user=system seinfo=platform domain=system_app type=system_app_data_file
+ user=bluetooth seinfo=bluetooth domain=bluetooth type=bluetooth_data_file
+diff --git a/public/property.te b/public/property.te
+index 9db9b94..1c213c9 100644
+--- a/public/property.te
++++ b/public/property.te
+@@ -83,6 +83,7 @@ system_restricted_prop(persist_wm_debug_prop)
+ system_restricted_prop(power_debug_prop)
+ system_restricted_prop(property_service_version_prop)
+ system_restricted_prop(provisioned_prop)
++system_restricted_prop(r0dump_fusion_prop)
+ system_restricted_prop(restorecon_prop)
+ system_restricted_prop(retaildemo_prop)
+ system_restricted_prop(smart_idle_maint_enabled_prop)

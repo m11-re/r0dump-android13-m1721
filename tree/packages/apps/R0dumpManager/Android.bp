@@ -1,0 +1,99 @@
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+prebuilt_etc {
+    name: "privapp_permissions_com.android.r0dumpmanager",
+    sub_dir: "permissions",
+    src: "privapp-permissions-com.android.r0dumpmanager.xml",
+    filename_from_src: true,
+}
+
+android_library {
+    name: "R0dumpManagerLib",
+    srcs: ["src/**/*.kt"],
+    resource_dirs: ["res"],
+    platform_apis: true,
+    static_libs: [
+        "androidx.activity_activity-compose",
+        "androidx.compose.animation_animation",
+        "androidx.compose.foundation_foundation",
+        "androidx.compose.material_material-icons-core",
+        "androidx.compose.material_material-icons-extended",
+        "androidx.compose.material3_material3",
+        // androidx.compose.material3_material3-window-size-class is absent from this tree's AndroidX
+        // snapshot (material3 1.1.0-alpha06 predates the artifact split).  The two width-class
+        // checks the UI needs are provided by src/com/android/r0dumpmanager/compat/WindowSizeCompat.kt
+        // instead, using the same dp thresholds.
+        "androidx.compose.runtime_runtime",
+        "androidx.compose.ui_ui",
+        "androidx.core_core-ktx",
+        "androidx.lifecycle_lifecycle-runtime-ktx",
+        "androidx.lifecycle_lifecycle-viewmodel-compose",
+        "androidx.navigation_navigation-compose",
+        "kotlin-stdlib",
+        "kotlinx-coroutines-android",
+        "kotlinx-coroutines-core",
+    ],
+    // Upstream targets Kotlin 1.8+; this tree ships kotlinc 1.7.20 whose default language
+    // level is 1.7.  The compiler does implement `data object` (a 1.8 feature) and produces
+    // the generated equals/hashCode/toString when asked for that level, so opt in rather
+    // than rewriting the sealed-hierarchy variants.
+    kotlincflags: [
+        "-Xjvm-default=all",
+        // Space-separated so the whole option stays a single flag: soong requires every entry to
+        // start with '-' and rejects a bare "1.8" argument.
+        "-language-version 1.8",
+    ],
+}
+
+android_app {
+    name: "R0dumpManager",
+    defaults: ["platform_app_defaults"],
+    certificate: "platform",
+    platform_apis: true,
+    privileged: true,
+    required: ["privapp_permissions_com.android.r0dumpmanager"],
+    static_libs: ["R0dumpManagerLib"],
+    // Upstream targets Kotlin 1.8+; this tree ships kotlinc 1.7.20 whose default language
+    // level is 1.7.  The compiler does implement `data object` (a 1.8 feature) and produces
+    // the generated equals/hashCode/toString when asked for that level, so opt in rather
+    // than rewriting the sealed-hierarchy variants.
+    kotlincflags: [
+        "-Xjvm-default=all",
+        // Space-separated so the whole option stays a single flag: soong requires every entry to
+        // start with '-' and rejects a bare "1.8" argument.
+        "-language-version 1.8",
+    ],
+    optimize: {
+        proguard_compatibility: false,
+    },
+}
+
+android_test {
+    name: "R0dumpManagerTests",
+    manifest: "tests/AndroidManifest.xml",
+    certificate: "platform",
+    srcs: ["tests/src/**/*.kt"],
+    platform_apis: true,
+    static_libs: [
+        "R0dumpManagerLib",
+        "androidx.compose.runtime_runtime",
+        "androidx.compose.ui_ui-test-junit4",
+        "androidx.compose.ui_ui-test-manifest",
+        "androidx.test.ext.junit",
+        "androidx.test.runner",
+        "junit",
+    ],
+    // Upstream targets Kotlin 1.8+; this tree ships kotlinc 1.7.20 whose default language
+    // level is 1.7.  The compiler does implement `data object` (a 1.8 feature) and produces
+    // the generated equals/hashCode/toString when asked for that level, so opt in rather
+    // than rewriting the sealed-hierarchy variants.
+    kotlincflags: [
+        "-Xjvm-default=all",
+        // Space-separated so the whole option stays a single flag: soong requires every entry to
+        // start with '-' and rejects a bare "1.8" argument.
+        "-language-version 1.8",
+    ],
+    test_suites: ["device-tests"],
+}

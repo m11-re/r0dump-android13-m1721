@@ -1,0 +1,12 @@
+service r0dump_file_helper /system/bin/r0dump_file_helper
+    class core
+    user root
+    # sdcard_rw (1015) is required on this device: Android/data lives on a separate sdcardfs mount
+    # whose directories are owned by the app uid and group sdcard_rw.  Without membership in that
+    # group, and without CAP_DAC_OVERRIDE, creating entries below a package's files/ directory fails
+    # with EACCES even as root:
+    #   mkdirat(9, "r0dump-fusion", 02770) = -1 EACCES
+    # Upstream does not need it because Android 16 provides Android/data through FUSE instead.
+    group ext_data_rw media_rw sdcard_rw everybody
+    capabilities CHOWN FOWNER FSETID SETUID
+    socket r0dump_file_helper seqpacket 0660 system system

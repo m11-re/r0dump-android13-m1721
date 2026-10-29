@@ -1,0 +1,9 @@
+# r0dump for Android 13 (LineageOS 20) — 补丁序列
+# 由 apply.sh 按 (项目, 补丁) 对逐个应用；此处仅为可读清单。
+#
+# art                          01-art.patch
+# frameworks/base              02-frameworks-base.patch
+# libcore                      03-libcore.patch
+# system/sepolicy              04-system-sepolicy.patch
+# device/meizu/m1721           05-device-meizu-m1721.patch
+# (树内新增)                    tree/packages/apps/R0dumpManager/

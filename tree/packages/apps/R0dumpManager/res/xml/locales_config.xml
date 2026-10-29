@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<locale-config xmlns:android="http://schemas.android.com/apk/res/android">
+    <!--
+      Upstream also sets android:defaultLocale, which this tree's aapt2 attribute table does not
+      know.  The <locale> entries are what actually drive per-app language selection, and the
+      English string resources remain the fallback, so dropping the attribute changes nothing.
+    -->
+    <locale android:name="en" />
+    <locale android:name="zh-CN" />
+</locale-config>
